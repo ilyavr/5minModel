@@ -1,0 +1,3 @@
+boundaryPowerMax,boundaryPowerMin,power_len,power_mean,power_median,power_std,power_min,power_max,power_range,cnt_over_max,cnt_under_min,frac_over_max,frac_under_min,max_over_max,min_under_min,max_jump,temperature,true_label,prob_good,pred_3class,pred_name
+75.21,91.1,7.0,83.78571428571429,82.0,5.842315727622438,76.0,92.0,16.0,7.0,6.0,1.0,0.8571428571428571,16.790000000000006,15.099999999999994,6.0,21.6,0,0.3660342,2,good
+74.09,90.09,5.0,77.0,77.0,1.4142135623730951,75.0,79.0,4.0,5.0,5.0,1.0,1.0,4.909999999999997,15.090000000000003,3.0,21.0,1,0.72649086,2,good
