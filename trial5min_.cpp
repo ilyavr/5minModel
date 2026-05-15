@@ -12,7 +12,7 @@
 using json = nlohmann::json;
 
 const double LOW_THR  = 0.20;
-const double HIGH_THR = 0.70;
+const double HIGH_THR = 0.60;
 
 
 std::vector<double> parse_power_series(const std::string& s) {
@@ -78,68 +78,136 @@ int run_trial_class(
 
     json boundary_json = json::parse(attr_val);
     auto [bmin, bmax] = get_bounds_from_model(boundary_json, temperature);
+
+     size_t n = power.size();
+
+    double sum = 0.0;
+    for (double v : power) sum += v;
+    double mean = sum / n;
+
+    double sq = 0.0;
+    for (double v : power)
+        sq += (v - mean) * (v - mean);
+
+    double stdv = std::sqrt(sq / n);
+
+    double pmin = *std::min_element(power.begin(), power.end());
+    double pmax = *std::max_element(power.begin(), power.end());
+
     double width = (bmax - bmin) + 1e-6;
-    size_t n = power.size();
 
-    std::vector<double> norm;
-    norm.reserve(n);
+    double under_sum = 0.0, over_sum = 0.0;
+    double under_max = 0.0, over_max = 0.0;
 
-    for (size_t i = 0; i < n; ++i)
-        norm.push_back((power[i] - bmin) / width);
+    int cnt_under = 0;
+    int cnt_over = 0;
 
-    int inside_cnt = 0;
-    for (double v : norm)
-        if (v >= 0.0 && v <= 1.0)
-            inside_cnt++;
+    double max_jump_raw = 0.0;
 
-    double inside_frac = (double)inside_cnt / n;
+    for (size_t i = 0; i < n; ++i) {
+        double u = std::max(bmin - power[i], 0.0) / width;
+        double o = std::max(power[i] - bmax, 0.0) / width;
 
-    double final_inside_frac = (norm.back() >= 0.0 && norm.back() <= 1.0) ? 1.0 : 0.0;
+        under_sum += u;
+        over_sum  += o;
 
-    double max_over = 0.0;
-    double max_under = 0.0;
+        if (u > under_max) under_max = u;
+        if (o > over_max)  over_max = o;
 
-    for (double v : norm) {
-        if (v > 1.0) max_over = std::max(max_over, v - 1.0);
-        if (v < 0.0) max_under = std::max(max_under, -v);
+        if (power[i] < bmin) cnt_under++;
+        if (power[i] > bmax) cnt_over++;
+
+        if (i > 0) {
+            double jump = std::abs(power[i] - power[i - 1]);
+            if (jump > max_jump_raw) max_jump_raw = jump;
+        }
     }
 
-    double local_jump = 0.0;
-    for (size_t i = 1; i < n; ++i)
-        local_jump = std::max(local_jump, std::abs(power[i] - power[i - 1]));
+    double under_mean = under_sum / n;
+    double over_mean  = over_sum / n;
 
-    double baseline = 0.0;
-    for (size_t i = 1; i < n; ++i)
-        baseline += std::abs(power[i] - power[i - 1]);
+    double under_frac = (double)cnt_under / n;
+    double over_frac  = (double)cnt_over / n;
 
-    baseline = baseline / (n - 1 + 1e-6) + 1e-6;
+    double max_jump = max_jump_raw / width;
 
-    double has_spike = (local_jump / baseline > 5.0) ? 1.0 : 0.0;
+    double slope = 0.0;
 
-    double data[5] = {
-        final_inside_frac,
-        inside_frac,
-        max_over,
-        max_under,
-        has_spike
+    if (n > 1) {
+        double sum_x = 0.0, sum_y = 0.0, sum_xy = 0.0, sum_x2 = 0.0;
+
+        for (size_t i = 0; i < n; ++i) {
+            double x = (double)i;
+            double y = power[i];
+
+            sum_x += x;
+            sum_y += y;
+            sum_xy += x * y;
+            sum_x2 += x * x;
+        }
+
+        double denom = n * sum_x2 - sum_x * sum_x;
+
+        if (std::abs(denom) > 1e-12) {
+            slope = (n * sum_xy - sum_x * sum_y) / denom;
+            double intercept = (sum_y - slope * sum_x) / n;
+
+            double err = 0.0;
+            for (size_t i = 0; i < n; ++i) {
+                double trend = slope * i + intercept;
+                err += std::abs(power[i] - trend);
+            }
+
+        }
+    }
+
+    double trend_slope = slope / width;
+
+
+    double mean_pos = (mean - bmin) / width;
+    double margin_to_min = (pmin - bmin) / width;
+    double margin_to_max = (bmax - pmax) / width;
+
+    double power_cv = stdv / (mean + 1e-6);
+
+    double data[12] = {
+        under_mean,
+        under_max,
+        over_mean,
+        over_max,
+        under_frac,
+        over_frac,
+        mean_pos,
+        margin_to_min,
+        margin_to_max,
+        max_jump,
+        trend_slope,
+        power_cv
     };
 
-    const char* feature_names[5] = {
-        "final_inside_frac",
-        "inside_frac",
-        "max_over",
-        "max_under",
-        "has_spike"
+    const char* feature_names[12] = {
+        "under_mean",
+        "under_max",
+        "over_mean",
+        "over_max",
+        "under_frac",
+        "over_frac",
+        "mean_pos",
+        "margin_to_min",
+        "margin_to_max",
+        "max_jump",
+        "trend_slope",
+        "power_cv"
     };
-    // for (int i = 0; i < 5; ++i)
+    // for (int i = 0; i < 12; ++i)
     //     std::cout << feature_names[i] << " = " << data[i] << std::endl;
 
 
     DMatrixHandle dmat;
-    float data_f[5];
-    for(int i=0;i<5;i++) data_f[i] = (float)data[i];
+    float data_f[12];
+    for(int i=0;i<12;i++) data_f[i] = (float)data[i];
 
-    if (XGDMatrixCreateFromMat(data_f,1,5,NAN,&dmat)!=0) return -6;
+    if (XGDMatrixCreateFromMat(data_f,1,12,NAN,&dmat)!=0) return -6;
 
     bst_ulong out_len;
     const float* out;
@@ -177,7 +245,7 @@ int run_trial_class(
     float bias = contribs[total - 1];
 
     // std::cout << "\n SHAP \n";
-    // for (int i = 0; i < 5; ++i) {
+    // for (int i = 0; i < 12; ++i) {
     //     std::cout 
     //         << feature_names[i] 
     //         << " (" << data[i] << ") => " 
@@ -188,7 +256,7 @@ int run_trial_class(
     // std::cout << "bias = " << bias << std::endl;
 
     double logit = bias;
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 12; ++i)
         logit += contribs[i];
 
     double prob_recalc = 1.0 / (1.0 + std::exp(-logit));
@@ -196,7 +264,7 @@ int run_trial_class(
     // все фичи
 
     std::vector<std::pair<std::string, float>> feats;
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 12; ++i)
         feats.push_back({feature_names[i], contribs[i]});
 
     std::sort(feats.begin(), feats.end(),
